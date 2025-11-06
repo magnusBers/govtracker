@@ -1,3 +1,5 @@
+# Trigger workflow registration
+
 name: Run GovTracker Daily
 on:
   schedule:

@@ -1,79 +1,131 @@
-import requests
-import os
+import requests, os, json
 from xml.etree import ElementTree
+from datetime import datetime
 
-# --- CONFIGURATION ---
-CUTOFF_DATE = "2024-07-04"  # Only fetch items after this date
 OUTPUT_DIR = "public"
+STATE_FILE = "last_run.json"
+START_DATE = "2024-07-04"  # Keir Starmer start date
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- WRITE HTML FILES ---
-def create_html_post(title, content):
-    """Save each record as a small HTML file inside /public"""
+# --- Load previous run state ---
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"laws": START_DATE, "policies": START_DATE, "spending": START_DATE}
+
+# --- Save new state ---
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+# --- Utility to write HTML ---
+def create_html(title, content):
     safe_title = "".join(c for c in title if c.isalnum() or c in " -_").rstrip()
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    filename = os.path.join(OUTPUT_DIR, f"{safe_title[:50]}.html")
-
+    filename = os.path.join(OUTPUT_DIR, f"{safe_title[:60]}.html")
     html = f"<h2>{title}</h2>\n<p>{content}</p>\n<hr>"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"📝  Saved: {filename}")
 
-# --- FETCH LAWS ---
-def fetch_laws():
+# --- Fetch Laws incrementally ---
+def fetch_laws(since):
     url = "https://www.legislation.gov.uk/ukpga/data.feed"
     r = requests.get(url)
     if r.status_code != 200:
-        print("⚠️  Failed to fetch laws feed"); return
+        print("❌ Failed to fetch laws feed"); return since
     xml = ElementTree.fromstring(r.content)
+    latest = since
     for e in xml.findall("{http://www.w3.org/2005/Atom}entry"):
+        updated = e.find("{http://www.w3.org/2005/Atom}updated").text[:10]
+        if updated <= since:
+            continue
         title = e.find("{http://www.w3.org/2005/Atom}title").text
         link = e.find("{http://www.w3.org/2005/Atom}link").attrib.get("href", "")
-        updated = e.find("{http://www.w3.org/2005/Atom}updated").text
-        if updated < CUTOFF_DATE:
-            continue
-        create_html_post(title, f"<a href='{link}' target='_blank'>View law</a>")
+        create_html(title, f"<a href='{link}' target='_blank'>View law</a>")
+        if updated > latest:
+            latest = updated
+    return latest
 
-# --- FETCH POLICIES ---
-def fetch_policies():
-    url = ("https://www.gov.uk/api/search.json?"
-           "filter_format=policy_paper&order=public_timestamp:desc&"
-           "filter_public_timestamp>=2024-07-04")
-    try:
-        data = requests.get(url).json()
-    except Exception as e:
-        print("⚠️  Failed to fetch policies:", e); return
-    for r in data.get("results", []):
-        title = r["title"]
-        link = "https://www.gov.uk" + r["link"]
-        create_html_post(title, f"<a href='{link}' target='_blank'>Read on GOV.UK</a>")
+# --- Fetch GOV.UK policy papers incrementally ---
+def fetch_policies(since):
+    page = 1
+    latest = since
+    while True:
+        url = (
+            "https://www.gov.uk/api/search.json?"
+            f"filter_format=policy_paper&order=public_timestamp:desc&page={page}&"
+            f"filter_public_timestamp>{since}"
+        )
+        r = requests.get(url)
+        if r.status_code != 200:
+            print("❌ Policies fetch failed on page", page); break
+        data = r.json()
+        results = data.get("results", [])
+        if not results:
+            break
+        for item in results:
+            title = item["title"]
+            link = "https://www.gov.uk" + item["link"]
+            date = item.get("public_timestamp", "")[:10]
+            create_html(title, f"<a href='{link}' target='_blank'>Read policy</a>")
+            if date > latest:
+                latest = date
+        page += 1
+    return latest
 
-# --- FETCH SPENDING ---
-def fetch_spending():
-    url = "https://data.gov.uk/api/3/action/package_search?q=spend+over+25000"
-    try:
-        data = requests.get(url).json()
-    except Exception as e:
-        print("⚠️  Failed to fetch spending:", e); return
-    for r in data.get("result", {}).get("results", []):
-        title = r["title"]
-        link = r["resources"][0]["url"] if r.get("resources") else ""
-        create_html_post(title, f"<a href='{link}' target='_blank'>Download dataset</a>")
+# --- Fetch data.gov.uk spending datasets incrementally ---
+def fetch_spending(since):
+    start = 0
+    rows = 100
+    latest = since
+    while True:
+        url = f"https://data.gov.uk/api/3/action/package_search?q=spend+over+25000&rows={rows}&start={start}"
+        r = requests.get(url)
+        if r.status_code != 200:
+            print("❌ Spending fetch failed"); break
+        data = r.json()
+        results = data["result"]["results"]
+        if not results:
+            break
+        for res in results:
+            title = res["title"]
+            link = res["resources"][0]["url"] if res.get("resources") else ""
+            date = res.get("metadata_modified", "")[:10]
+            if date <= since:
+                continue
+            create_html(title, f"<a href='{link}' target='_blank'>Download dataset</a>")
+            if date > latest:
+                latest = date
+        start += rows
+        if start >= data["result"]["count"]:
+            break
+    return latest
 
-# --- BUILD INDEX PAGE ---
+# --- Build Index ---
 def build_index():
     files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".html")]
-    index_html = "<h1>Latest Government Data</h1>\n" + "\n".join(
-        f"<a href='{f}'>{f}</a><br>" for f in sorted(files, reverse=True)
-    )
+    files.sort(reverse=True)
+    html = "<h1>Latest UK Government Data</h1><hr>\n"
+    for f in files:
+        html += f"<a href='{f}' target='_blank'>{f.replace('.html','')}</a><br>\n"
     with open(os.path.join(OUTPUT_DIR, "index.html"), "w", encoding="utf-8") as f:
-        f.write(index_html)
-    print("📄  Built index.html")
+        f.write(html)
+    print("📄  Index updated")
 
-# --- MAIN ---
+# --- Main ---
 if __name__ == "__main__":
-    print("Fetching latest government data...")
-    fetch_laws()
-    fetch_policies()
-    fetch_spending()
+    state = load_state()
+    print("🕒 Previous run state:", state)
+
+    new_laws = fetch_laws(state["laws"])
+    new_policies = fetch_policies(state["policies"])
+    new_spending = fetch_spending(state["spending"])
+
+    state["laws"] = max(state["laws"], new_laws)
+    state["policies"] = max(state["policies"], new_policies)
+    state["spending"] = max(state["spending"], new_spending)
+
+    save_state(state)
     build_index()
-    print("✅  Done.")
+    print("✅  Updated data. Current state:", state)

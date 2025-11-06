@@ -4,7 +4,7 @@ import datetime
 
 # --- CONFIGURATION ---
 WORDPRESS_URL = "https://YOUR-WORDPRESS-SITE.com"
-USERNAME = "Daniel Bernal"
+USERNAME = "danieljfbernal"
 APP_PASSWORD = "ikfbsmyssi73ycy5"  # Generated from WordPress -> Profile -> Application Passwords
 CUTOFF_DATE = "2024-07-04"  # Only fetch items after this date
 

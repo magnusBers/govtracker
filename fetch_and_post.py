@@ -103,11 +103,13 @@ def fetch_spending_since(since):
             date = (pkg.get("metadata_modified") or pkg.get("metadata_created") or "")[:10]
             if date <= since:
                 continue
-            title = pkg.get("title","(no title)")
-            link = pkg.get("resources",[{}])[0].get("url","")
+            title = pkg.get("title", "(no title)")
+            resources = pkg.get("resources") or []
+            link = resources[0]["url"] if resources and "url" in resources[0] else "(no dataset link)"
             write_html(title, f"<p><a href='{link}' target='_blank'>Dataset</a></p><p><small>{date}</small></p>")
             latest = max(latest, date)
             total += 1
+
         start += rows
         if start >= result.get("count", 0):
             break

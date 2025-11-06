@@ -18,6 +18,9 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 def write_html(title, body_html):
+    # Ensure title is always a string
+    if not isinstance(title, str) or not title:
+        title = "(untitled record)"
     safe = "".join(c for c in title if c.isalnum() or c in " -_").rstrip()
     path = os.path.join(OUTPUT_DIR, f"{safe[:80]}.html")
     if not os.path.exists(path):
@@ -25,6 +28,7 @@ def write_html(title, body_html):
             f.write(f"<h2>{title}</h2>\n{body_html}\n<hr>")
         print("📝", path)
     return path
+
 
 # ---------- LAWS (Acts + Statutory Instruments) ----------
 def fetch_legislation_since(since):
